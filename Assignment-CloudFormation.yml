@@ -1,0 +1,293 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "These template create an Ec2 instance in private subnet and connect via port 22 with 
+the help of NatGateway.Most of the value Prefixed with template for simplicity.Lambda function will invoke the 
+Ec2 instance and Check the port 22 is up and running status and then push that to Cloud watch log stream"
+Parameters:
+  Az:
+    Type: 'AWS::EC2::AvailabilityZone::Name'
+  Img:
+    Type: String
+  Instance:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - m1.small
+      - m1.large
+  KeyName:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+
+Resources:
+  VPC:
+   Type: AWS::EC2::VPC
+   Properties: 
+     CidrBlock: '10.100.0.0/16'
+     EnableDnsHostnames: 'true'
+     EnableDnsSupport: 'true'
+     Tags: 
+       - Key: Name
+         Value: VPC
+
+       - Key: AWS
+         Value: Assignment
+  PublicSubnet:
+   Type: AWS::EC2::Subnet
+   Properties: 
+     AvailabilityZone: 'ap-south-1a'
+     CidrBlock: '10.100.1.0/24'
+     MapPublicIpOnLaunch: 'true'
+     Tags: 
+       - Key: Name
+         Value: Public_Subnet
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  PrivateSubnet:
+   Type: AWS::EC2::Subnet
+   Properties: 
+     AvailabilityZone: 'ap-south-1b'
+     CidrBlock: '10.100.2.0/24'
+     MapPublicIpOnLaunch: 'false'
+     Tags: 
+       - Key: Name
+         Value: Private_Subnet
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  ElaticIp:
+   Type: AWS::EC2::EIP
+   Properties: 
+     Domain: vpc
+     Tags: 
+       - Key: Name
+         Value: Private_Subnet
+       - Key: AWS
+         Value: Assignment
+  NatGateway:
+   Type: AWS::EC2::NatGateway
+   Properties: 
+     AllocationId: 
+         Fn::GetAtt:
+         - ElaticIp
+         - AllocationId
+     SubnetId: 
+        Ref: PublicSubnet
+     Tags: 
+       - Key: Name
+         Value: Nat_Gateway
+       - Key: AWS
+         Value: Assignment
+  RouteTable:
+   Type: AWS::EC2::RouteTable
+   Properties:
+     Tags: 
+       - Key: Name
+         Value: RouteTable
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  Route:
+   Type: AWS::EC2::Route
+   Properties:
+      RouteTableId:
+         Ref: RouteTable
+      DestinationCidrBlock: '10.100.0.0/16'
+      NatGatewayId:
+         Ref: NatGateway
+  SubnetAssociation:
+   Type: AWS::EC2::SubnetRouteTableAssociation
+   Properties: 
+      RouteTableId: 
+         Ref: PublicRouteTable
+      SubnetId: 
+         Ref: PublicSubnet
+  PublicRouteTable:
+   Type: AWS::EC2::RouteTable
+   Properties:
+     Tags: 
+       - Key: Name
+         Value: PublicRouteTable
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  PublicRoute:
+   Type: AWS::EC2::Route
+   Properties:
+      RouteTableId:
+         Ref: PublicRouteTable
+      DestinationCidrBlock: '10.100.0.0/16'
+      InternetGatewayId:
+         Ref: InternetGateway
+  PublicSubnetAssociation:
+   Type: AWS::EC2::SubnetRouteTableAssociation
+   Properties: 
+      RouteTableId: 
+         Ref: RouteTable
+      SubnetId: 
+         Ref: PrivateSubnet
+  SecurityGroup:
+   Type: AWS::EC2::SecurityGroup
+   Properties: 
+      GroupDescription: "Allow Inbound access from port 22"
+      GroupName: VPC_SG_SSH
+      SecurityGroupEgress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '10.100.0.0/16'
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '10.100.0.0/16'
+      Tags: 
+       - Key: Name
+         Value: VPC_SG_SSH
+       - Key: AWS
+         Value: Assignment
+      VpcId: 
+        Ref: VPC
+  myInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+       - Key: Name
+         Value: VPC_SG_SSH
+       - Key: AWS
+         Value: Assignment
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      InternetGatewayId: 
+        Ref: myInternetGateway
+      VpcId: 
+        Ref: VPC
+  PrivateInstance:
+   Type: AWS::EC2::Instance
+   Properties: 
+       AvailabilityZone: "ap-south-1b"
+       ImageId: 
+          Ref: Img
+       InstanceType:
+          Ref: Instance
+       KeyName: 
+          Ref: KeyName
+       SecurityGroupIds:
+          - Ref: SecurityGroup
+       SubnetId: 
+          Ref: PrivateSubnet
+       Tags: 
+          - Key: Name
+            Value: VPC_SG_SSH
+          - Key: AWS
+            Value: Assignment
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: worker_handler
+      Role: 
+        Fn::GetAtt:
+         - LambdaExecutionRole
+         - Arn
+      Code:
+#Preferred to push the code in s3 bucket.To show the function of the program,mentioned in the template itself#
+        ZipFile: |
+            import boto3
+            import paramiko
+            import socket
+            def worker_handler(event, context):
+
+                #s3_client = boto3.client('s3')
+                #Download private key file from secure S3 bucket
+                #s3_client.download_file('s3-key-bucket','keys/keyname.pem', '/tmp/keyname.pem')
+
+                k = environ.get('SSH_KEY')
+                #host = environ.get('REMOTE_HOST')
+                #user = environ.get('REMOTE_USERNAME')
+                ssh_key_filepath = environ.get('SSH_KEY')
+                c = paramiko.SSHClient()
+                c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+                host='10.100.2.69'
+                print "Connecting to " + host
+                c.connect( hostname = host, username = "ec2-user", pkey = k )
+                print "Connected to " + host
+
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                result = sock.connect_ex((host,22))
+                if result == 0:
+                    print "Port is open"
+                else:
+                    print "Port is not open"
+                sock.close()
+                
+      Runtime: python3.6
+      MemorySize: 500
+      Timeout: 10
+      VpcConfig:
+        Ref: VpcConfig
+  VpcConfig:
+    SecurityGroupIds:
+      - Ref: SecurityGroup
+    SubnetIds:
+      - Ref: PrivateSubnet
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            Resource: arn:aws:logs:*:*:*
+  Asyncconfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      DestinationConfig:
+          OnSuccess:
+            Destination:
+              Ref: LogGroup
+      FunctionName: 
+          Ref: Function
+
+  EventTrigger:
+    DependsOn: PrivateInstance
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: This will trigger the lambda function to check the port 22 every min
+      Name: portchecker
+      ScheduleExpression: rate(1 minutes)
+      State: ENABLED
+      Targets: 
+        -  Arn: 
+            Fn::GetAtt:
+              - Function
+              - Arn
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+       LogGroupName: portchecker
+       RetentionInDays: 7
+
+  LogStream: 
+    Type: AWS::Logs::LogStream
+    Properties: 
+       LogGroupName: "portchecker"
+       LogStreamName: "MyAppLogStream"
