@@ -1,0 +1,235 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "These template create an Ec2 instance in private subnet and connect via port 22 with 
+the help of NatGateway.Most of the value Prefixed with template for simplicity."
+Parameters:
+  Az:
+    Type: 'AWS::EC2::AvailabilityZone::Name'
+  Img:
+    Type: String
+  Instance:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - m1.small
+      - m1.large
+  KeyName:
+    Type: 'AWS::EC2::KeyPair::KeyName'
+
+Resources:
+  VPC:
+   Type: AWS::EC2::VPC
+   Properties: 
+     CidrBlock: '10.100.0.0/16'
+     EnableDnsHostnames: 'true'
+     EnableDnsSupport: 'true'
+     Tags: 
+       - Key: Name
+         Value: VPC
+
+       - Key: AWS
+         Value: Assignment
+  PublicSubnet:
+   Type: AWS::EC2::Subnet
+   Properties: 
+     AvailabilityZone: 'ap-south-1a'
+     CidrBlock: '10.100.1.0/24'
+     MapPublicIpOnLaunch: 'true'
+     Tags: 
+       - Key: Name
+         Value: Public_Subnet
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  PrivateSubnet:
+   Type: AWS::EC2::Subnet
+   Properties: 
+     AvailabilityZone: 'ap-south-1b'
+     CidrBlock: '10.100.2.0/24'
+     MapPublicIpOnLaunch: 'false'
+     Tags: 
+       - Key: Name
+         Value: Private_Subnet
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  PrivateSubnetOne:
+   Type: AWS::EC2::Subnet
+   Properties: 
+     AvailabilityZone: 'ap-south-1b'
+     CidrBlock: '10.100.3.0/24'
+     MapPublicIpOnLaunch: 'false'
+     Tags: 
+       - Key: Name
+         Value: Private_Subnet_One
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  ElaticIp:
+   Type: AWS::EC2::EIP
+   Properties: 
+     Domain: vpc
+     Tags: 
+       - Key: Name
+         Value: Private_Subnet
+       - Key: AWS
+         Value: Assignment
+  NatGateway:
+   Type: AWS::EC2::NatGateway
+   Properties: 
+     AllocationId: 
+         Fn::GetAtt:
+         - ElaticIp
+         - AllocationId
+     SubnetId: 
+        Ref: PublicSubnet
+     Tags: 
+       - Key: Name
+         Value: Nat_Gateway
+       - Key: AWS
+         Value: Assignment
+  RouteTable:
+   Type: AWS::EC2::RouteTable
+   Properties:
+     Tags: 
+       - Key: Name
+         Value: RouteTable
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  Route:
+   Type: AWS::EC2::Route
+   Properties:
+      RouteTableId:
+         Ref: RouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      NatGatewayId:
+         Ref: NatGateway
+  SubnetAssociation:
+   Type: AWS::EC2::SubnetRouteTableAssociation
+   Properties: 
+      RouteTableId: 
+         Ref: PublicRouteTable
+      SubnetId: 
+         Ref: PublicSubnet
+  PublicRouteTable:
+   Type: AWS::EC2::RouteTable
+   Properties:
+     Tags: 
+       - Key: Name
+         Value: PublicRouteTable
+       - Key: AWS
+         Value: Assignment
+     VpcId: 
+        Ref: VPC
+  PublicRoute:
+   Type: AWS::EC2::Route
+   Properties:
+      RouteTableId:
+         Ref: PublicRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId:
+         Ref: myInternetGateway
+  PublicSubnetAssociation:
+   Type: AWS::EC2::SubnetRouteTableAssociation
+   Properties: 
+      RouteTableId: 
+         Ref: RouteTable
+      SubnetId: 
+         Ref: PrivateSubnet
+  SecurityGroup:
+   Type: AWS::EC2::SecurityGroup
+   Properties: 
+      GroupDescription: "Allow Inbound access from port 22"
+      GroupName: VPC_SG_SSH
+      SecurityGroupEgress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '10.100.0.0/16'
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '10.100.0.0/16'
+      Tags: 
+       - Key: Name
+         Value: VPC_SG_SSH
+       - Key: AWS
+         Value: Assignment
+      VpcId: 
+        Ref: VPC
+  myInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+       - Key: Name
+         Value: VPC_SG_SSH
+       - Key: AWS
+         Value: Assignment
+  IgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties: 
+      InternetGatewayId: 
+        Ref: myInternetGateway
+      VpcId: 
+        Ref: VPC
+  PrivateInstance:
+   Type: AWS::EC2::Instance
+   Properties: 
+       AvailabilityZone: "ap-south-1b"
+       ImageId: 
+          Ref: Img
+       InstanceType:
+          Ref: Instance
+       KeyName: 
+          Ref: KeyName
+       SecurityGroupIds:
+          - Ref: SecurityGroup
+       SubnetId: 
+          Ref: PrivateSubnet
+       Tags: 
+          - Key: Name
+            Value: VPC_SG_SSH
+          - Key: AWS
+            Value: Assignment
+Outputs:
+   PrivateIp:
+    Description: "Ip address of the instance launched in the private subnet and these will be used in 
+    Port_checker.py to check the port status of the port 22"
+    Value:
+      'Fn::GetAtt':
+         - PrivateInstance
+         - PrivateIp'
+    Export:
+      Name:
+        'Fn::Sub': '${AWS::StackName}-PrivateIp'
+
+   SecurityGroupName:
+    Description: The SG ID to use for LambdaFunction
+    Value:
+            Ref: SecurityGroup
+    Export:
+      Name:
+          'Fn::Sub': '${AWS::StackName}-SGID'
+   
+   PrivateSubnetone:
+    Description: The PrivateSubnetone ID to use for LambdaFunction
+    Value:
+            Ref: PrivateSubnet
+    Export:
+      Name:
+          'Fn::Sub': '${AWS::StackName}-One'
+
+   PrivateSubnetTwo:
+    Description: The PrivateSubnetTwo ID to use for LambdaFunction
+    Value:
+            Ref: PrivateSubnetOne
+    Export:
+      Name:
+          'Fn::Sub': '${AWS::StackName}-Two'
+  

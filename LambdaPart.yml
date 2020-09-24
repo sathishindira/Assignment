@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Lambda function will invoke the Ec2 instance and Check the port 22 is up and running status
+and then push that to Cloud watch log stream.Function Code to check the status of the port for the private
+instance placed in separete Port_checker.py file.In these template i assume that it was updated in the S3
+Bucket named as LambdaZipsBucket "
+Parameter:
+  PrivateInstanceParams:
+     Description: 'Private Instance Security group Stack Name'
+     Type: String
+     Default: PrivateInstance
+Resources:
+  Function:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.Port_checker
+      Role: 
+        Fn::GetAtt:
+         - LambdaExecutionRole
+         - Arn
+      Code:    
+        S3Bucket: 'LambdaZipsBucket'
+        S3Key: 'functions/packages/MyFunction/lambda.zip'   
+      Runtime: python3.6
+      MemorySize: 128
+      Timeout: 10
+      Environment:
+        Variables:
+          PrivateIp: 
+            'Fn::ImportValue': 
+                'Fn::Sub': '${PrivateInstanceParams}-PrivateIp'
+          portNum: 22
+      VpcConfig:
+        SecurityGroupIds:
+          - 'Fn::ImportValue': 
+                'Fn::Sub': '${PrivateInstanceParams}-SGID'
+        SubnetIds:
+          - 'Fn::ImportValue': 
+                'Fn::Sub': '${PrivateInstanceParams}-One'
+          - 'Fn::ImportValue': 
+                'Fn::Sub': '${PrivateInstanceParams}-Two'
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:*
+            Resource: arn:aws:logs:*:*:*
+  EventTrigger:
+    DependsOn: PrivateInstance
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: This will trigger the lambda function to check the port 22 every min
+      Name: portchecker
+      ScheduleExpression: rate(1 minutes)
+      State: ENABLED
+      Targets: 
+        -  Arn: 
+            Fn::GetAtt:
+              - Function
+              - Arn
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+       LogGroupName: portchecker
+       RetentionInDays: 7
+
+  LogStream: 
+    Type: AWS::Logs::LogStream
+    Properties: 
+       LogGroupName: "portchecker"
+       LogStreamName: "MyAppLogStream"
+  
+  Asyncconfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      DestinationConfig:
+          OnSuccess:
+            Destination:
+              Ref: LogGroup
+      FunctionName: 
+          Ref: Function  
